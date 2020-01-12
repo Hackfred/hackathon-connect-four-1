@@ -1,10 +1,10 @@
-# test-project
+# connect-four
 
-> A Vue.js project
+This project has been built as one of a few challenges that can be solved by pupils in school hackathons. It is based on a blog post from https://rossta.net/blog/animating-connect-four-with-vuejs.html.
 
 ## Build Setup
 
-``` bash
+```bash
 # install dependencies
 npm install
 
