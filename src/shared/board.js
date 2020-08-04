@@ -26,6 +26,7 @@ export class VirtualBoard {
     }
   };
 
+  //
   canPlay(col) {
     return this.getNewRow(this.checkers, col) < this.rowCount;
   }

@@ -33,8 +33,16 @@
 <script>
 import Vue from "vue";
 import GameBoard from "./GameBoard.vue";
-import { PLAY, RED, OVER, EMPTY, BLUE } from "../shared/constants.js";
+import {
+  PLAY,
+  RED,
+  OVER,
+  EMPTY,
+  BLUE,
+  EVENT_BUS_AI
+} from "../shared/constants.js";
 import { titleize, min, max, key, maybeDone } from "../shared/functions.js";
+// import VirtualBoard from "../shared/board.js";
 
 export default {
   name: "GameContainer",
@@ -48,7 +56,8 @@ export default {
     return {
       checkers: {},
       isLocked: false,
-      playerColor: BLUE,
+      isLockedByAI: false,
+      playerColor: RED,
       rowCount: 6,
       colCount: 7,
       status: PLAY,
@@ -96,12 +105,140 @@ export default {
   methods: {
     key,
 
+    calculateColumLvl1() {
+      const col = 0;
+      return col;
+    },
+
+    calculateColumLvl2() {
+      let possible_moves = [];
+      for (let i = 0; i < this.colCount; i++) {
+        // if (this.checkers.canPlay(i)) {
+        possible_moves.push(i);
+        //}
+      }
+
+      const move = Math.floor(Math.random() * possible_moves.length);
+
+      return possible_moves[move];
+    },
+
+    calculateColumLvl3() {
+      const getNewRow = (checkers, col) => {
+        const a = Object.keys(checkers)
+          .map(k => parseInt(k, 10))
+          .filter(i => {
+            const ccol = i % 10;
+            return ccol === col;
+          });
+
+        const max = Math.max(...a);
+
+        if (max > -1) {
+          return Math.floor(max / 10) + 1;
+        } else {
+          return 0;
+        }
+      };
+
+      const simulateXMoves = (checkersCopy, playerColor, moves) => {
+        const canWinWithNextMove = () => {
+          for (let i = 0; i < this.colCount; i++) {
+            const row = getNewRow(checkersCopy, i);
+
+            let newChecker = this.getChecker(checkersCopy, { row, col: i });
+            newChecker["color"] = JSON.parse(JSON.stringify(playerColor));
+            checkersCopy[key(row, i)] = newChecker;
+            const isWin = this.checkForWinFrom(checkersCopy, { row, col: i });
+            delete checkersCopy[key(row, i)];
+            if (row < this.rowCount && isWin !== undefined) {
+              // player can win with his upcoming turn => return score and colum to select
+              return [
+                (this.colCount * this.rowCount -
+                  Object.keys(checkersCopy).length) /
+                  2,
+                i
+              ];
+            }
+          }
+
+          return [0, -1];
+        };
+
+        if (moves === 1) {
+          return canWinWithNextMove();
+        } else {
+          // check for draw
+
+          // check if current player (in simulation can win with next move)
+          const nextMove = canWinWithNextMove();
+          if (nextMove[1] !== -1) {
+            return nextMove;
+          }
+
+          // get all scores for possible next moves
+
+          let highestScore = -this.colCount * this.rowCount;
+          let bestMove = 0;
+          for (let i = 0; i < this.colCount; i++) {
+            const row = getNewRow(checkersCopy, i);
+            if (row < this.rowCount) {
+              // play the move in simulation
+              let newChecker = this.getChecker(checkersCopy, { row, col: i });
+              newChecker["color"] = JSON.parse(JSON.stringify(playerColor));
+              //let checkersCopy = JSON.parse(JSON.stringify(checkersCopy));
+              checkersCopy[key(row, i)] = newChecker;
+
+              let nextPlayerColor;
+              if (playerColor === BLUE) {
+                nextPlayerColor = RED;
+              } else {
+                nextPlayerColor = BLUE;
+              }
+              // player can win with his upcoming turn => return score and colum to select
+              const score = simulateXMoves(
+                checkersCopy,
+                nextPlayerColor,
+                moves - 1
+              );
+              if (-score[0] > highestScore) {
+                bestMove = i;
+                highestScore = -score[0];
+              }
+              delete checkersCopy[key(row, i)];
+            }
+          }
+          return [highestScore, bestMove];
+        }
+      };
+
+      /* level 3 */
+      console.log(this.checkers);
+
+      const weights = simulateXMoves(
+        JSON.parse(JSON.stringify(this.checkers)),
+        this.playerColor,
+        6
+      );
+      console.log(weights);
+      return weights[1];
+    },
+
+    async makeAIMove() {
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          resolve(this.calculateColumLvl3());
+        }, 100);
+      });
+    },
+
     /* Wenn diese Methode aufgerufen wird, wird ein neues Spiel gestartet. 
        Damit wird der Zustand des Spiels vollständig zurückgesetzt.
     */
     reset() {
       this.winner = undefined;
       this.isLocked = false;
+      this.isLockedByAI = false;
       this.status = PLAY;
       this.checkers = {}; /* Hier entfernen wir alle Steine vom Feld */
     },
@@ -115,14 +252,14 @@ export default {
       }
     },
 
-    /* Diese Methode setzt einen Setin auf eine bestimmte Stelle des Spielfelds. */
+    /* Diese Methode setzt einen Stein auf eine bestimmte Stelle des Spielfelds. */
     setChecker({ row, col }, attrs = {}) {
-      const checker = this.getChecker({ row, col });
+      const checker = this.getChecker(this.checkers, { row, col });
       return Vue.set(this.checkers, key(row, col), { ...checker, ...attrs });
     },
 
-    getChecker({ row, col }) {
-      return this.checkers[key(row, col)] || { row, col, color: "empty" };
+    getChecker(checkers, { row, col }) {
+      return checkers[key(row, col)] || { row, col, color: "empty" };
     },
 
     /* Diese Methode wird immer dann aufgerufen, wenn ein Spieler einen Stein aufs Spielfeld setzt. 
@@ -134,7 +271,7 @@ export default {
          Wenn isLocked den Wert true hat, ist das Spielfeld gesperrt und es wird kein Stein gesetzt.
          Das ist z.B. der Fall, wenn das Spiel beendet wurde.
       */
-      if (this.isLocked) return;
+      if (this.isLocked || this.isLockedByAI) return;
 
       this.isLocked = true;
       const color = this.playerColor;
@@ -143,11 +280,11 @@ export default {
          Man kann diese Ausgaben auf der rechten Seite unter "Console" sehen.
          Sie können helfen, den Ablauf dieses Programms besser zu verstehen.   
       */
-      console.log("setting checker", key(row, col), { row, col, color });
       this.setChecker({ row, col }, { color });
 
       /* Prüft, ob das Spiel beendet wurde */
-      this.checkForDraw() || this.checkForWinFrom({ row, col });
+      this.isDraw = this.checkForDraw();
+      this.winner = this.checkForWinFrom(this.checkers, { row, col });
       /* Spielerwechsel */
       this.toggleColor();
     },
@@ -162,16 +299,27 @@ export default {
         this.displayWin(this.winner);
       } else {
         this.isLocked = false;
+
+        if (this.moves.length % 2 === 1) {
+          this.isLockedByAI = true;
+          this.makeAIMove().then(col => {
+            if (col >= 0 && col < this.colCount) {
+              this.isLockedByAI = false;
+              EVENT_BUS_AI.$emit(`drop-checker-to-col-${col}`, "setChecker");
+            } else {
+              console.log("Our AI calculated a colum that is not valid.");
+            }
+          });
+        }
       }
     },
 
     /* Prüft, ob das Spiel mit einem Unentschieden beendet wurde. */
     checkForDraw() {
-      console.log(
-        Object.keys(this.checkers).length === this.rowCount * this.colCount
-      );
       if (Object.keys(this.checkers).length === this.rowCount * this.colCount) {
-        this.isDraw = true;
+        return true;
+      } else {
+        return false;
       }
     },
 
@@ -179,14 +327,15 @@ export default {
        Diese Methode wird immer mit einem Array von 4 Spielfeldpositionen aufgerufen.
        Wenn auf diesen 4 Positionen 4 gleichfarbige Steine liegen, gibt diese Methode true zurück, weil dieser Spieler dann gewonnen hat.
     */
-    getWinner(...segment) {
+    getWinner(checkers, ...segment) {
       if (segment.length !== 4) return false;
-      const checkers = segment.map(([row, col]) =>
-        this.getChecker({ row, col })
+      const segment_checkers = segment.map(([row, col]) =>
+        this.getChecker(checkers, { row, col })
       );
-      const color = checkers[0].color;
+      const color = segment_checkers[0].color;
       if (color === EMPTY) return false;
-      if (checkers.every(c => c.color === color)) return { color, checkers };
+      if (segment_checkers.every(c => c.color.value === color.value))
+        return { color: color, checkers: segment_checkers };
       return false;
     },
 
@@ -200,9 +349,10 @@ export default {
       o x x x x o o o
       Wenn 4 Steine in einer solchen Reihe liegen, gibt diese Funktion true zurück.
     */
-    checkHorizontalSegments({ focalRow, minCol, maxCol }) {
+    checkHorizontalSegments(checkers, { focalRow, minCol, maxCol }) {
       for (let row = focalRow, col = minCol; col <= maxCol; col++) {
         const winner = this.getWinner(
+          checkers,
           [row, col],
           [row, col + 1],
           [row, col + 2],
@@ -222,9 +372,10 @@ export default {
       o o o o x o o o
       Wenn 4 Steine in einer solchen Reihe liegen, gibt diese Funktion true zurück.
     */
-    checkVerticalSegments({ focalRow, focalCol, minRow, maxRow }) {
+    checkVerticalSegments(checkers, { focalRow, focalCol, minRow, maxRow }) {
       for (let col = focalCol, row = minRow; row <= focalRow; row++) {
         const winner = this.getWinner(
+          checkers,
           [row, col],
           [row + 1, col],
           [row + 2, col],
@@ -244,14 +395,10 @@ export default {
       o o o x o o o o
       Wenn 4 Steine in einer solchen Diagonalen liegen, gibt diese Funktion true zurück.
     */
-    checkForwardSlashSegments({
-      focalRow,
-      focalCol,
-      minRow,
-      minCol,
-      maxRow,
-      maxCol
-    }) {
+    checkForwardSlashSegments(
+      checkers,
+      { focalRow, focalCol, minRow, minCol, maxRow, maxCol }
+    ) {
       const startForwardSlash = (row, col) => {
         while (row > minRow && col > minCol) {
           row--;
@@ -267,6 +414,7 @@ export default {
         row++, col++
       ) {
         const winner = this.getWinner(
+          checkers,
           [row, col],
           [row + 1, col + 1],
           [row + 2, col + 2],
@@ -286,14 +434,10 @@ export default {
       o o o o o o x o
       Wenn 4 Steine in einer solchen Diagonalen liegen, gibt diese Funktion true zurück.
     */
-    checkBackwardSlashSegments({
-      focalRow,
-      focalCol,
-      minRow,
-      minCol,
-      maxRow,
-      maxCol
-    }) {
+    checkBackwardSlashSegments(
+      checkers,
+      { focalRow, focalCol, minRow, minCol, maxRow, maxCol }
+    ) {
       const startBackwardSlash = (row, col) => {
         while (row < maxRow && col > minCol) {
           row++;
@@ -308,6 +452,7 @@ export default {
         row--, col++
       ) {
         const winner = this.getWinner(
+          checkers,
           [row, col],
           [row - 1, col + 1],
           [row - 2, col + 2],
@@ -320,7 +465,7 @@ export default {
     /* Prüft, ob das Spiel durch den letzten Stein, der gelegt wurde, gewonnen worden ist.
        Dazu muss in alle Richtungen (horizontal, vertical und diagonal) grprüft werden, ob eine Reihe von 4 gleichen Steinen existiert.
     */
-    checkForWinFrom(lastChecker) {
+    checkForWinFrom(checkers, lastChecker) {
       if (!lastChecker) return;
       /* focalRow enthält die Zeile des gerade gesetzten Steins, focalCol die Spalte 
          Wurde des letzte Stein links unten gesetzt sieht das so auf:
@@ -334,11 +479,12 @@ export default {
       const maxRow = max(focalRow, this.rowCount - 1);
       const coords = { focalRow, focalCol, minRow, minCol, maxRow, maxCol };
 
-      this.winner =
-        this.checkHorizontalSegments(coords) ||
-        this.checkVerticalSegments(coords) ||
-        this.checkForwardSlashSegments(coords) ||
-        this.checkBackwardSlashSegments(coords);
+      return (
+        this.checkHorizontalSegments(checkers, coords) ||
+        this.checkVerticalSegments(checkers, coords) ||
+        this.checkForwardSlashSegments(checkers, coords) ||
+        this.checkBackwardSlashSegments(checkers, coords)
+      );
     },
 
     /* Beendet das Spiel, wenn es ein Unentschieden gibt */
